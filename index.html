@@ -95,28 +95,26 @@
             left: 0;
             z-index: 1;
         }
+        
+        /* Tabbed Debug Overlay */
         #debug-overlay {
             display: none;
             position: fixed;
             bottom: 15px;
             left: 15px;
             right: 15px;
-            max-height: 220px;
+            height: 220px;
             background: rgba(10, 10, 15, 0.95);
             border: 1px solid #ff4757;
             border-radius: 8px;
-            padding: 12px;
+            padding: 10px;
             font-family: 'Courier New', Courier, monospace;
             font-size: 12px;
             color: #00ffcc;
-            overflow-y: auto;
             z-index: 999999;
             box-shadow: 0 10px 30px rgba(0,0,0,0.9);
             backdrop-filter: blur(5px);
-            text-align: left;
-        }
-        .error-log {
-            color: #ff5252;
+            box-sizing: border-box;
         }
         #debug-header {
             display: flex;
@@ -124,7 +122,36 @@
             align-items: center;
             border-bottom: 1px solid #333;
             padding-bottom: 6px;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
+        }
+        .tab-btn {
+            background: #18181f;
+            border: 1px solid #444;
+            color: #888;
+            padding: 4px 10px;
+            border-radius: 4px 4px 0 0;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 11px;
+            margin-right: 4px;
+        }
+        .tab-btn.active {
+            background: #ff4757;
+            color: #fff;
+            border-color: #ff4757;
+        }
+        .debug-tab-content {
+            display: none;
+            height: 150px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            text-align: left;
+        }
+        .debug-tab-content.active {
+            display: block;
+        }
+        .error-log {
+            color: #ff5252;
         }
         #debug-hint {
             position: fixed;
@@ -140,7 +167,7 @@
 </head>
 <body>
 
-    <div id="version-tag">v1.17</div>
+    <div id="version-tag">v1.18</div>
     <button id="fs-btn" onclick="goFullscreen()">[⤢] Fullscreen Canvas</button>
 
     <div id="drop-zone" onclick="document.getElementById('file-input').click()">
@@ -156,10 +183,14 @@
     <div id="debug-hint">Type 'debug' to toggle console</div>
     <div id="debug-overlay">
         <div id="debug-header">
-            <span style="font-weight: bold; color: #ff4757;">LÖVE RUNTIME DEBUG CONSOLE</span>
+            <div>
+                <button id="tab-sys-btn" class="tab-btn active" onclick="switchTab('sys')">System Console</button>
+                <button id="tab-game-btn" class="tab-btn" onclick="switchTab('game')">Game Output (Lua)</button>
+            </div>
             <button onclick="toggleDebug(false)" style="background: #222; border: 1px solid #444; color: #fff; padding: 2px 8px; border-radius: 4px; cursor: pointer;">Close [X]</button>
         </div>
-        <div id="debug-logs"></div>
+        <div id="tab-sys" class="debug-tab-content active"></div>
+        <div id="tab-game" class="debug-tab-content"></div>
     </div>
 
     <script>
@@ -169,32 +200,75 @@
         const canvas = document.getElementById('canvas');
         const fsBtn = document.getElementById('fs-btn');
 
-        window.debugLogBuffer = [];
+        window.sysLogBuffer = [];
+        window.gameLogBuffer = [];
 
-        function logToDebug(text, isError = false) {
+        function logToSys(text, isError = false) {
             const timeStr = new Date().toLocaleTimeString();
             const logMsg = `[${timeStr}] ${text}`;
-            window.debugLogBuffer.push({ msg: logMsg, error: isError });
+            window.sysLogBuffer.push({ msg: logMsg, error: isError });
+            appendLog('tab-sys', logMsg, isError);
+            console.log(text);
+        }
+
+        function logToGame(text, isError = false) {
+            const timeStr = new Date().toLocaleTimeString();
+            const logMsg = `[${timeStr}] ${text}`;
+            window.gameLogBuffer.push({ msg: logMsg, error: isError });
+            appendLog('tab-game', logMsg, isError);
             
-            const logsContainer = document.getElementById('debug-logs');
-            if (logsContainer) {
+            // Auto-switch to Game tab if Lua throws a runtime error!
+            if (isError) switchTab('game');
+            console.log("GameLog: " + text);
+        }
+
+        function appendLog(targetId, msg, isError) {
+            const container = document.getElementById(targetId);
+            if (container) {
                 const div = document.createElement('div');
                 if (isError) div.className = 'error-log';
-                div.textContent = logMsg;
-                logsContainer.appendChild(div);
-                logsContainer.scrollTop = logsContainer.scrollHeight;
+                div.textContent = msg;
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
             }
         }
 
-        // Intercept native console.error & console.warn so Lua boot errors appear in debug overlay!
+        function switchTab(tabName) {
+            document.getElementById('tab-sys-btn').classList.toggle('active', tabName === 'sys');
+            document.getElementById('tab-game-btn').classList.toggle('active', tabName === 'game');
+            document.getElementById('tab-sys').classList.toggle('active', tabName === 'sys');
+            document.getElementById('tab-game').classList.toggle('active', tabName === 'game');
+        }
+
+        // Catch console errors and route them to the Game tab if they mention boot.lua or love engine
         const origConsoleErr = console.error;
         console.error = function(...args) {
-            logToDebug("Console Error: " + args.join(' '), true);
+            const str = args.join(' ');
+            if (str.includes('[love') || str.includes('boot.lua') || str.includes('Error:')) {
+                logToGame("Lua Exception: " + str, true);
+            } else {
+                logToSys("Console Error: " + str, true);
+            }
             origConsoleErr.apply(console, args);
         };
 
+        const origConsoleLog = console.log;
+        console.log = function(...args) {
+            const str = args.join(' ');
+            if (str.startsWith('GameLog:')) {
+                origConsoleLog.apply(console, args);
+                return;
+            }
+            if (str.includes('[love') || str.includes('boot.lua')) {
+                logToGame(str, false);
+            } else {
+                logToSys(str, false);
+            }
+            origConsoleLog.apply(console, args);
+        };
+
         window.onerror = function(msg, url, line) {
-            logToDebug(`JS Error: ${msg} (line ${line})`, true);
+            logToSys(`JS Error: ${msg} (line ${line})`, true);
         };
 
         let typedKeys = '';
@@ -211,28 +285,14 @@
             const overlay = document.getElementById('debug-overlay');
             if (overlay) {
                 overlay.style.display = show ? 'block' : 'none';
-                if (show) {
-                    const logsContainer = document.getElementById('debug-logs');
-                    logsContainer.innerHTML = '';
-                    window.debugLogBuffer.forEach(item => {
-                        const div = document.createElement('div');
-                        if (item.error) div.className = 'error-log';
-                        div.textContent = item.msg;
-                        logsContainer.appendChild(div);
-                    });
-                    logsContainer.scrollTop = logsContainer.scrollHeight;
-                }
             }
         }
 
         function goFullscreen() {
-            if (canvas.requestFullscreen) {
-                canvas.requestFullscreen();
-            } else if (canvas.webkitRequestFullscreen) {
-                canvas.webkitRequestFullscreen();
-            }
+            if (canvas.requestFullscreen) canvas.requestFullscreen();
+            else if (canvas.webkitRequestFullscreen) canvas.webkitRequestFullscreen();
             canvas.focus();
-            logToDebug("Fullscreen requested and canvas focused.");
+            logToSys("Fullscreen requested and canvas focused.");
         }
 
         dropZone.addEventListener('dragover', (e) => e.preventDefault());
@@ -253,12 +313,12 @@
             dropZone.style.display = 'none';
             loadingStatus.style.display = 'block';
             loadingStatus.textContent = `Reading ${file.name}...`;
-            logToDebug(`Reading file into memory: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+            logToSys(`Reading file into memory: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
             const reader = new FileReader();
             reader.onload = function(evt) {
                 const fileData = new Uint8Array(evt.target.result);
-                logToDebug("File read complete. Pre-configuring Engine...");
+                logToSys("File read complete. Pre-configuring Engine...");
 
                 loadingStatus.style.display = 'none';
                 canvas.style.display = 'block';
@@ -275,23 +335,22 @@
                     INITIAL_MEMORY: 268435456,
                     ALLOW_MEMORY_GROWTH: true,
                     print: function(text) {
-                        logToDebug("Engine: " + text);
+                        logToGame(text);
                     },
                     printErr: function(text) {
-                        logToDebug("Engine Error: " + text, true);
+                        logToGame(text, true);
                     },
                     onAbort: function(what) {
-                        logToDebug("WASM Abort triggered: " + what, true);
+                        logToSys("WASM Abort triggered: " + what, true);
                     },
                     preRun: [function() {
-                        logToDebug("Mounting game package to virtual filesystem...");
+                        logToSys("Mounting game package to virtual filesystem...");
                         const targetFS = (typeof Love !== 'undefined' && Love.FS) ? Love.FS : FS;
                         try {
                             targetFS.createDataFile('/', 'game.love', fileData, true, true, true);
-                            targetFS.createDataFile('/', 'main.love', fileData, true, true, true);
-                            logToDebug("Mount successful at /game.love and /main.love");
+                            logToSys("Mount successful at /game.love!");
                         } catch (err) {
-                            logToDebug("FS Mount Warning: " + err.message, true);
+                            logToSys("FS Mount Warning: " + err.message, true);
                         }
                     }],
                     locateFile: function(path) {
@@ -300,23 +359,24 @@
                     }
                 };
 
-                logToDebug("Loading 11.5/love.js script...");
+                logToSys("Loading 11.5/love.js script...");
                 const script = document.createElement('script');
                 script.src = '11.5/love.js';
                 script.onload = function() {
-                    logToDebug("11.5/love.js loaded. Initializing Engine Promise...");
+                    logToSys("11.5/love.js loaded. Initializing Engine Promise...");
                     if (typeof window.Love === 'function') {
                         window.Love(engineConfig).then(function(instance) {
-                            logToDebug("WASM Module Promise resolved successfully! Game running.");
+                            logToSys("WASM Module Promise resolved successfully! Engine active.");
+                            logToGame("LÖVE 11.5 Lua State initialized.");
                         }).catch(function(err) {
-                            logToDebug("WASM Initialization Error: " + err, true);
+                            logToSys("WASM Initialization Error: " + err, true);
                         });
                     } else {
-                        logToDebug("Error: window.Love constructor not found!", true);
+                        logToSys("Error: window.Love constructor not found!", true);
                     }
                 };
                 script.onerror = function() {
-                    logToDebug("Failed to fetch 11.5/love.js engine script!", true);
+                    logToSys("Failed to fetch 11.5/love.js engine script!", true);
                 };
                 document.body.appendChild(script);
             };
