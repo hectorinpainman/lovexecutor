@@ -32,7 +32,6 @@
             z-index: 999999;
             pointer-events: none;
         }
-        /* Top-right Fullscreen Button */
         #fs-btn {
             display: none;
             position: fixed;
@@ -141,7 +140,7 @@
 </head>
 <body>
 
-    <div id="version-tag">v1.16</div>
+    <div id="version-tag">v1.17</div>
     <button id="fs-btn" onclick="goFullscreen()">[⤢] Fullscreen Canvas</button>
 
     <div id="drop-zone" onclick="document.getElementById('file-input').click()">
@@ -185,8 +184,14 @@
                 logsContainer.appendChild(div);
                 logsContainer.scrollTop = logsContainer.scrollHeight;
             }
-            console.log(text);
         }
+
+        // Intercept native console.error & console.warn so Lua boot errors appear in debug overlay!
+        const origConsoleErr = console.error;
+        console.error = function(...args) {
+            logToDebug("Console Error: " + args.join(' '), true);
+            origConsoleErr.apply(console, args);
+        };
 
         window.onerror = function(msg, url, line) {
             logToDebug(`JS Error: ${msg} (line ${line})`, true);
@@ -257,10 +262,9 @@
 
                 loadingStatus.style.display = 'none';
                 canvas.style.display = 'block';
-                fsBtn.style.display = 'block'; // Show the fullscreen button!
+                fsBtn.style.display = 'block';
                 toggleDebug(true);
 
-                // Set proper native backing resolution for the canvas
                 canvas.width = 1280;
                 canvas.height = 720;
                 canvas.focus();
@@ -280,17 +284,14 @@
                         logToDebug("WASM Abort triggered: " + what, true);
                     },
                     preRun: [function() {
-                        logToDebug("Mounting 'game.love' to virtual filesystem...");
+                        logToDebug("Mounting game package to virtual filesystem...");
+                        const targetFS = (typeof Love !== 'undefined' && Love.FS) ? Love.FS : FS;
                         try {
-                            Love.FS.createDataFile('/', 'game.love', fileData, true, true, true);
-                            logToDebug("Mount successful!");
+                            targetFS.createDataFile('/', 'game.love', fileData, true, true, true);
+                            targetFS.createDataFile('/', 'main.love', fileData, true, true, true);
+                            logToDebug("Mount successful at /game.love and /main.love");
                         } catch (err) {
-                            if (typeof FS !== 'undefined') {
-                                FS.createDataFile('/', 'game.love', fileData, true, true, true);
-                                logToDebug("Mount successful via global FS!");
-                            } else {
-                                logToDebug("FS Mount Error: " + err.message, true);
-                            }
+                            logToDebug("FS Mount Warning: " + err.message, true);
                         }
                     }],
                     locateFile: function(path) {
