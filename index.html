@@ -96,7 +96,6 @@
             z-index: 1;
         }
         
-        /* Tabbed Debug Overlay */
         #debug-overlay {
             display: none;
             position: fixed;
@@ -167,7 +166,7 @@
 </head>
 <body>
 
-    <div id="version-tag">v1.19</div>
+    <div id="version-tag">v1.20</div>
     <button id="fs-btn" onclick="goFullscreen()">[⤢] Fullscreen Canvas</button>
 
     <div id="drop-zone" onclick="document.getElementById('file-input').click()">
@@ -247,9 +246,7 @@
 
         function toggleDebug(show) {
             const overlay = document.getElementById('debug-overlay');
-            if (overlay) {
-                overlay.style.display = show ? 'block' : 'none';
-            }
+            if (overlay) overlay.style.display = show ? 'block' : 'none';
         }
 
         function goFullscreen() {
@@ -293,9 +290,10 @@
                 canvas.height = 720;
                 canvas.focus();
 
-                const engineConfig = {
+                // Explicit module configuration for Emscripten virtual mounting
+                window.Module = {
                     canvas: canvas,
-                    arguments: ['game.love'],
+                    arguments: ['/game.love'],
                     INITIAL_MEMORY: 268435456,
                     ALLOW_MEMORY_GROWTH: true,
                     print: function(text) {
@@ -306,15 +304,20 @@
                     },
                     onAbort: function(what) {
                         logToSys("WASM Abort triggered: " + what, true);
+                        logToGame("Fatal Engine Abort: " + what, true);
                     },
                     preRun: [function() {
-                        logToSys("Mounting game package to virtual filesystem...");
-                        const targetFS = (typeof Love !== 'undefined' && Love.FS) ? Love.FS : FS;
+                        logToSys("Writing game package directly to Emscripten Virtual FS (/game.love)...");
                         try {
-                            targetFS.createDataFile('/', 'game.love', fileData, true, true, true);
-                            logToSys("Mount successful at /game.love!");
+                            // Ensure Module/FS is ready and write raw file bytes to root
+                            if (typeof FS !== 'undefined') {
+                                FS.writeFile('/game.love', fileData);
+                                logToSys("File successfully written to FS at /game.love (" + fileData.length + " bytes)");
+                            } else {
+                                logToSys("FS module not immediately available in preRun!", true);
+                            }
                         } catch (err) {
-                            logToSys("FS Mount Warning: " + err.message, true);
+                            logToSys("FS Write Error: " + err.message, true);
                         }
                     }],
                     locateFile: function(path) {
@@ -329,10 +332,11 @@
                 script.onload = function() {
                     logToSys("11.5/love.js loaded. Initializing Engine Promise...");
                     if (typeof window.Love === 'function') {
-                        window.Love(engineConfig).then(function(instance) {
+                        window.Love(window.Module).then(function(instance) {
                             logToSys("WASM Module Promise resolved successfully! Engine active.");
                         }).catch(function(err) {
                             logToSys("WASM Initialization Error: " + err, true);
+                            logToGame("Engine Exception: " + err, true);
                         });
                     } else {
                         logToSys("Error: window.Love constructor not found!", true);
