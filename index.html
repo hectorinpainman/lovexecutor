@@ -18,6 +18,21 @@
             margin: 0;
             overflow: hidden;
         }
+        /* Version Indicator Tag - Deployment 12 */
+        #version-tag {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 71, 87, 0.2);
+            border: 1px solid #ff4757;
+            color: #ff4757;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 11px;
+            z-index: 999999;
+            pointer-events: none;
+        }
         #drop-zone {
             width: 400px;
             padding: 40px;
@@ -99,6 +114,8 @@
     </style>
 </head>
 <body>
+
+    <div id="version-tag">v1.12</div>
 
     <div id="drop-zone" onclick="document.getElementById('file-input').click()">
         <h2>LÖVE Web Executor</h2>
@@ -194,37 +211,42 @@
 
             dropZone.style.display = 'none';
             loadingStatus.style.display = 'block';
-            loadingStatus.textContent = `Reading ${file.name}...`;
-            logToDebug(`Reading file into memory: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+            loadingStatus.textContent = `Reading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)...`;
+            logToDebug(`Reading large file into memory: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
             const reader = new FileReader();
             reader.onload = function(evt) {
                 const fileData = new Uint8Array(evt.target.result);
-                logToDebug("File read successfully into buffer.");
+                logToDebug("File read successfully into buffer. Initializing WebAssembly Module...");
 
                 loadingStatus.style.display = 'none';
                 canvas.style.display = 'block';
-                toggleDebug(true); // Auto-open debug box so you can watch everything stream
+                toggleDebug(true);
 
-                logToDebug("Configuring Emscripten Module bindings...");
-
-                // Configure Module directly for 11.5/love.js
                 window.Module = {
                     canvas: canvas,
                     arguments: ['game.love'],
+                    INITIAL_MEMORY: 268435456, // 256MB heap allocation for heavy games
+                    ALLOW_MEMORY_GROWTH: true,
                     print: function(text) {
                         logToDebug("Engine: " + text);
                     },
                     printErr: function(text) {
                         logToDebug("Engine Error: " + text, true);
                     },
+                    onAbort: function(what) {
+                        logToDebug("WASM Abort triggered: " + what, true);
+                    },
                     preRun: [function() {
                         logToDebug("Mounting 'game.love' to virtual Emscripten filesystem...");
-                        FS.createDataFile('/', 'game.love', fileData, true, true, true);
-                        logToDebug("Virtual mount complete. Booting Lua state...");
+                        try {
+                            FS.createDataFile('/', 'game.love', fileData, true, true, true);
+                            logToDebug("Virtual mount of 'game.love' successful.");
+                        } catch (err) {
+                            logToDebug("FS Mount Error: " + err.message, true);
+                        }
                     }],
                     locateFile: function(path) {
-                        logToDebug("Locating internal asset: " + path);
                         if (path.endsWith('.wasm')) {
                             return '11.5/love.wasm';
                         }
@@ -236,10 +258,10 @@
                 const script = document.createElement('script');
                 script.src = '11.5/love.js';
                 script.onload = function() {
-                    logToDebug("11.5/love.js runtime loaded successfully!");
+                    logToDebug("11.5/love.js script execution completed.");
                 };
                 script.onerror = function() {
-                    logToDebug("Failed to load 11.5/love.js engine script!", true);
+                    logToDebug("Failed to load 11.5/love.js script file!", true);
                 };
                 document.body.appendChild(script);
             };
