@@ -50,8 +50,11 @@
             font-family: monospace;
             z-index: 10;
         }
-        
-        /* Floating Persistent Debug Console Style */
+        #canvas {
+            display: none;
+            background-color: #000;
+            outline: none;
+        }
         #debug-overlay {
             display: none;
             position: fixed;
@@ -71,7 +74,6 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.9);
             backdrop-filter: blur(5px);
             text-align: left;
-            pointer-events: auto;
         }
         .error-log {
             color: #ff5252;
@@ -106,8 +108,8 @@
     </div>
 
     <div id="loading-status">Preparing game container...</div>
+    <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
 
-    <!-- Persistent Debug UI Elements -->
     <div id="debug-hint">Type 'debug' to toggle console</div>
     <div id="debug-overlay">
         <div id="debug-header">
@@ -121,8 +123,8 @@
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
         const loadingStatus = document.getElementById('loading-status');
+        const canvas = document.getElementById('canvas');
 
-        // Global logger array to catch logs before DOM is ready
         window.debugLogBuffer = [];
 
         function logToDebug(text, isError = false) {
@@ -141,12 +143,10 @@
             console.log(text);
         }
 
-        // Catch general runtime JS errors
         window.onerror = function(msg, url, line) {
             logToDebug(`JS Error: ${msg} (line ${line})`, true);
         };
 
-        // Hotkey detector for typing "debug"
         let typedKeys = '';
         window.addEventListener('keydown', (e) => {
             typedKeys += e.key.toLowerCase();
@@ -154,8 +154,7 @@
             if (typedKeys === 'debug') {
                 const overlay = document.getElementById('debug-overlay');
                 if (overlay) {
-                    const isVisible = overlay.style.display === 'block';
-                    toggleDebug(!isVisible);
+                    toggleDebug(overlay.style.display !== 'block');
                 }
             }
         });
@@ -165,7 +164,6 @@
             if (overlay) {
                 overlay.style.display = show ? 'block' : 'none';
                 if (show) {
-                    // Populate buffered logs when opened
                     const logsContainer = document.getElementById('debug-logs');
                     logsContainer.innerHTML = '';
                     window.debugLogBuffer.forEach(item => {
@@ -177,13 +175,6 @@
                     logsContainer.scrollTop = logsContainer.scrollHeight;
                 }
             }
-        }
-
-        // Check if loaded via URL params
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.has('g')) {
-            dropZone.style.display = 'none';
-            loadPlayerScript();
         }
 
         dropZone.addEventListener('dragover', (e) => e.preventDefault());
@@ -203,50 +194,57 @@
 
             dropZone.style.display = 'none';
             loadingStatus.style.display = 'block';
-            loadingStatus.textContent = `Booting up ${file.name}...`;
-            logToDebug(`Initializing load for file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+            loadingStatus.textContent = `Reading ${file.name}...`;
+            logToDebug(`Reading file into memory: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
-            const blobUrl = URL.createObjectURL(file);
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                const fileData = new Uint8Array(evt.target.result);
+                logToDebug("File read successfully into buffer.");
 
-            // Configure Module so Emscripten hooks into our debug console
-            window.Module = {
-                arguments: [file.name],
-                print: function(text) {
-                    logToDebug("Emscripten: " + text);
-                },
-                printErr: function(text) {
-                    logToDebug("Emscripten Error: " + text, true);
-                },
-                preRun: [function() {
-                    logToDebug("Virtual filesystem mounting active...");
-                }]
+                loadingStatus.style.display = 'none';
+                canvas.style.display = 'block';
+                toggleDebug(true); // Auto-open debug box so you can watch everything stream
+
+                logToDebug("Configuring Emscripten Module bindings...");
+
+                // Configure Module directly for 11.5/love.js
+                window.Module = {
+                    canvas: canvas,
+                    arguments: ['game.love'],
+                    print: function(text) {
+                        logToDebug("Engine: " + text);
+                    },
+                    printErr: function(text) {
+                        logToDebug("Engine Error: " + text, true);
+                    },
+                    preRun: [function() {
+                        logToDebug("Mounting 'game.love' to virtual Emscripten filesystem...");
+                        FS.createDataFile('/', 'game.love', fileData, true, true, true);
+                        logToDebug("Virtual mount complete. Booting Lua state...");
+                    }],
+                    locateFile: function(path) {
+                        logToDebug("Locating internal asset: " + path);
+                        if (path.endsWith('.wasm')) {
+                            return '11.5/love.wasm';
+                        }
+                        return '11.5/' + path;
+                    }
+                };
+
+                logToDebug("Loading 11.5/love.js engine script...");
+                const script = document.createElement('script');
+                script.src = '11.5/love.js';
+                script.onload = function() {
+                    logToDebug("11.5/love.js runtime loaded successfully!");
+                };
+                script.onerror = function() {
+                    logToDebug("Failed to load 11.5/love.js engine script!", true);
+                };
+                document.body.appendChild(script);
             };
 
-            // Wipe body for player.js canvas, but instantly restore our debug overlay so it stays on top
-            const oldLogsHTML = document.getElementById('debug-overlay').outerHTML;
-            const oldHintHTML = document.getElementById('debug-hint').outerHTML;
-
-            document.body.innerHTML = '<canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>' + oldLogsHTML + oldHintHTML;
-            
-            // Re-apply display state if it was open
-            document.getElementById('debug-overlay').style.display = 'block';
-            toggleDebug(true); // Auto-open debug console on load so you can watch what happens!
-
-            logToDebug("Injecting official player.js runtime...");
-            loadPlayerScript(blobUrl);
-        }
-
-        function loadPlayerScript(blobUrl) {
-            const script = document.createElement('script');
-            if (blobUrl) {
-                script.src = 'player.js?g=' + encodeURIComponent(blobUrl) + '&n=1';
-            } else {
-                script.src = 'player.js';
-            }
-            script.onerror = function() {
-                logToDebug("Failed to load player.js script!", true);
-            };
-            document.body.appendChild(script);
+            reader.readAsArrayBuffer(file);
         }
     </script>
 </body>
