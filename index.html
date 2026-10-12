@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web .love Executor</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #121214;
+            color: #e1e1e6;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #drop-zone {
+            width: 80%;
+            max-width: 600px;
+            padding: 40px;
+            border: 2px dashed #444;
+            border-radius: 12px;
+            text-align: center;
+            background: #1e1e24;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+        #drop-zone.hover {
+            border-color: #e53935;
+            background: #282830;
+        }
+        #file-input {
+            display: none;
+        }
+        #canvas {
+            display: none;
+            background-color: #000;
+            outline: none;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            border-radius: 4px;
+        }
+        .btn {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #e53935;
+            color: #fff;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Upload/Drag & Drop UI -->
+    <div id="drop-zone">
+        <h2>LÖVE Game Executor</h2>
+        <p style="margin-top: 8px; color: #a8a8b3;">Drag and drop any <code>.love</code> file here</p>
+        <div class="btn">Select File</div>
+        <input type="file" id="file-input" accept=".love">
+    </div>
+
+    <!-- Screen Canvas -->
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+
+    <!-- Load love.js player directly from CDN -->
+    <script src="https://cdn.jsdelivr.net/gh/2dengine/love.js@latest/player.js"></script>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const canvas = document.getElementById('canvas');
+
+        // Click trigger for hidden file input
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        // Drag and drop handlers
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('hover');
+        });
+
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('hover');
+            if (e.dataTransfer.files.length) {
+                runLoveFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                runLoveFile(e.target.files[0]);
+            }
+        });
+
+        // Main execution logic
+        function runLoveFile(file) {
+            if (!file.name.endsWith('.love')) {
+                alert('Please upload a valid .love file!');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                const arrayBuffer = evt.target.result;
+
+                // Hide dropzone and display the game canvas
+                dropZone.style.display = 'none';
+                canvas.style.display = 'block';
+
+                // Initialize Love.js runtime dynamically
+                Love({
+                    canvas: canvas,
+                    arguments: [file.name],
+                    INITIAL_MEMORY: 67108864, // 64MB RAM Allocation
+                    preRun: [function() {
+                        // Mount loaded .love array buffer directly into Emscripten virtual file system
+                        Love.FS.createDataFile('/', file.name, new Uint8Array(arrayBuffer), true, true, true);
+                    }]
+                });
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+    </script>
+</body>
+</html>
