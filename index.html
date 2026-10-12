@@ -115,13 +115,14 @@
     target.scrollTop = target.scrollHeight;
   }
   function log(message, error = false) { appendLog(sysLog, message, error); console[error ? 'error' : 'log']('[Executor] ' + message); }
-  function game(message, error = false) { appendLog(gameLog, message, error); console[error ? 'error' : 'log']('[LÖVE] ' + message); }
+  
+  // FIX: game() only appends to the UI panel now to avoid the recursive loop with console.error overrides
+  function game(message, error = false) { appendLog(gameLog, message, error); }
+
   function showDebug(show = true) { $('debug-overlay').style.display = show ? 'block' : 'none'; }
   function switchTab(name) {
-    $('tab-sys-btn').classList.toggle('active', name === 'sys');
-    $('tab-game-btn').classList.toggle('active', name === 'game');
-    $('tab-sys').classList.toggle('active', name === 'sys');
-    $('tab-game').classList.toggle('active', name === 'game');
+    $('tab-sys-btn').classList.toggle('active', name === 'sys');$('tab-game-btn').classList.toggle('active', name === 'game');
+    $('tab-sys').classList.toggle('active', name === 'sys');$('tab-game').classList.toggle('active', name === 'game');
   }
   function setStatus(text) { status.style.display = text ? 'block' : 'none'; status.textContent = text; }
 
@@ -132,6 +133,7 @@
     const reason = e.reason && (e.reason.stack || e.reason.message) || String(e.reason);
     log('Unhandled promise rejection: ' + reason, true);
   });
+  
   const originalConsoleError = console.error.bind(console);
   console.error = (...args) => { game(args.map(String).join(' '), true); originalConsoleError(...args); };
   const originalConsoleWarn = console.warn.bind(console);
@@ -147,7 +149,6 @@
       }
       const type = response.headers.get('content-type') || '(no content-type header)';
       if (path.endsWith('.wasm')) {
-        // Read only the first streamed chunk, then cancel; don't accidentally download a huge WASM file.
         const probe = await fetch(url, { headers: { 'Range': 'bytes=0-7' }, cache: 'no-store' });
         if (!probe.ok || !probe.body) {
           log(`FAIL ${path}: could not read a small WASM signature probe (HTTP ${probe.status}).`, true);
@@ -186,7 +187,6 @@
   function loadPlayerScript() {
     if (playerScriptPromise) return playerScriptPromise;
     playerScriptPromise = new Promise((resolve, reject) => {
-      // "g=norun" makes upstream player.js define Player without launching its placeholder game.
       const script = document.createElement('script');
       script.src = new URL('player.js?g=norun', document.baseURI).href;
       script.onload = () => {
@@ -204,7 +204,7 @@
 
   async function runGame(file) {
     if (!file) return;
-    if (!/\.love$|\.zip$/i.test(file.name)) {
+    if (!/\.love$\vert{}\.zip$/i.test(file.name)) {
       log('Please choose a .love or .zip package.', true);
       return;
     }
@@ -229,8 +229,6 @@
       log('Package ZIP signature looks valid.');
       const Player = await loadPlayerScript();
 
-      // Let the upstream player load its own support files and WASM. Only intercept
-      // the uploaded game package; this avoids guessing at Emscripten Module/FS internals.
       const originalRequestPkg = Player.requestPkg.bind(Player);
       const packageName = file.name;
       Player.requestPkg = function(uri) {
@@ -255,9 +253,8 @@
 
   $('choose-btn').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => { if (fileInput.files && fileInput.files[0]) runGame(fileInput.files[0]); });
-  $('check-btn').addEventListener('click', checkEngineFiles);
-  $('tab-sys-btn').addEventListener('click', () => switchTab('sys'));
-  $('tab-game-btn').addEventListener('click', () => switchTab('game'));
+  $('check-btn').addEventListener('click', checkEngineFiles);$('tab-sys-btn').addEventListener('click', () => switchTab('sys'));
+  $('tab-game-btn').addEventListener('click', () => switchTab('game'));$('close-debug').append?.('click', () => showDebug(false));
   $('close-debug').addEventListener('click', () => showDebug(false));
   fsButton.addEventListener('click', async () => {
     try {
