@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LÖVE Browser Executor</title>
+    <title>LÖVE Web Executor + Debug</title>
     <style>
         body {
             background-color: #0f0f13;
@@ -13,9 +13,10 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
-            overflow: hidden;
+            padding: 20px;
+            box-sizing: border-box;
         }
         #drop-zone {
             width: 400px;
@@ -37,6 +38,7 @@
             outline: none;
             border-radius: 8px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            margin-bottom: 15px;
         }
         .btn {
             margin-top: 15px;
@@ -47,6 +49,26 @@
             border-radius: 6px;
             font-weight: bold;
             cursor: pointer;
+        }
+        #debug-box {
+            width: 100%;
+            max-width: 700px;
+            height: 150px;
+            background: #09090c;
+            border: 1px solid #222;
+            border-radius: 8px;
+            padding: 10px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            color: #00ffcc;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            box-sizing: border-box;
+            text-align: left;
+            display: none;
+        }
+        .error-log {
+            color: #ff5252;
         }
     </style>
 </head>
@@ -60,10 +82,29 @@
     </div>
 
     <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    
+    <!-- Debug Console Box -->
+    <div id="debug-box"></div>
 
     <script>
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
+        const debugBox = document.getElementById('debug-box');
+
+        function logToDebug(text, isError = false) {
+            debugBox.style.display = 'block';
+            const span = document.createElement('div');
+            if (isError) span.className = 'error-log';
+            span.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+            debugBox.appendChild(span);
+            debugBox.scrollTop = debugBox.scrollHeight;
+            console.log(text);
+        }
+
+        // Catch general frontend errors
+        window.onerror = function(msg, url, line) {
+            logToDebug(`JS Error: ${msg} (line ${line})`, true);
+        };
 
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -97,20 +138,29 @@
             const canvas = document.getElementById('canvas');
             canvas.style.display = 'block';
 
+            logToDebug(`Loading file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
+
             const reader = new FileReader();
             reader.onload = function(evt) {
                 const fileData = new Uint8Array(evt.target.result);
+                logToDebug("File read successfully into ArrayBuffer.");
 
                 // Configure Module for Emscripten & love.js
                 window.Module = {
                     canvas: canvas,
                     arguments: ['game.love'],
+                    print: function(text) {
+                        logToDebug(text);
+                    },
+                    printErr: function(text) {
+                        logToDebug(text, true);
+                    },
                     preRun: [function() {
-                        // Mount the dropped file data directly into Emscripten virtual filesystem
+                        logToDebug("Mounting 'game.love' to virtual filesystem...");
                         FS.createDataFile('/', 'game.love', fileData, true, true, true);
+                        logToDebug("Virtual filesystem mount complete.");
                     }],
                     locateFile: function(path) {
-                        // Force WASM binary to pull from the CDN cleanly
                         if (path.endsWith('.wasm')) {
                             return 'https://cdn.jsdelivr.net/gh/2dengine/love.js@latest/11.5/love.wasm';
                         }
@@ -118,9 +168,12 @@
                     }
                 };
 
-                // Dynamically inject the love.js core runtime engine
+                logToDebug("Injecting love.js runtime script from CDN...");
                 const script = document.createElement('script');
                 script.src = 'https://cdn.jsdelivr.net/gh/2dengine/love.js@latest/11.5/love.js';
+                script.onerror = function() {
+                    logToDebug("Failed to load love.js script from CDN!", true);
+                };
                 document.body.appendChild(script);
             };
 
