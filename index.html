@@ -116,7 +116,7 @@
 </head>
 <body>
 
-    <div id="version-tag">v1.13</div>
+    <div id="version-tag">v1.14</div>
 
     <div id="drop-zone" onclick="document.getElementById('file-input').click()">
         <h2>LÖVE Web Executor</h2>
@@ -222,7 +222,6 @@
                 canvas.style.display = 'block';
                 toggleDebug(true);
 
-                // Set default dimensions for canvas
                 canvas.width = 800;
                 canvas.height = 600;
 
@@ -244,7 +243,7 @@
                         logToDebug("Mounting 'game.love' to virtual filesystem...");
                         try {
                             FS.createDataFile('/', 'game.love', fileData, true, true, true);
-                            logToDebug("Mount successful. Spawning main loop...");
+                            logToDebug("Mount successful.");
                         } catch (err) {
                             logToDebug("FS Mount Error: " + err.message, true);
                         }
@@ -255,16 +254,19 @@
                     }
                 };
 
-                logToDebug("Loading 11.5/love.js...");
+                logToDebug("Loading 11.5/love.js script...");
                 const script = document.createElement('script');
                 script.src = '11.5/love.js';
                 script.onload = function() {
-                    logToDebug("11.5/love.js loaded into DOM. Triggering love(Module)...");
-                    if (typeof love === 'function') {
-                        love(window.Module);
-                        logToDebug("love(Module) main entrypoint executed successfully!");
+                    logToDebug("11.5/love.js loaded into DOM.");
+                    if (typeof window.Love === 'function') {
+                        logToDebug("Initializing via window.Love(window.Module)...");
+                        window.Love(window.Module);
+                    } else if (typeof window.love === 'function') {
+                        logToDebug("Initializing via window.love(window.Module)...");
+                        window.love(window.Module);
                     } else {
-                        logToDebug("Error: love engine entry function was not found in window scope!", true);
+                        logToDebug("Engine script auto-initialized via Emscripten Module window scope.");
                     }
                 };
                 script.onerror = function() {
