@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LÖVE Web Executor v1.21</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: #0f0f13; color: #f3f3f7;
+      font: 15px system-ui, -apple-system, Segoe UI, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #version-tag {
+      position: fixed; top: 10px; left: 10px; z-index: 100;
+      padding: 5px 8px; border: 1px solid #ff4757; border-radius: 5px;
+      color: #ff6674; background: #ff47571c; font: 12px monospace;
+    }
+    #drop-zone {
+      width: min(520px, calc(100vw - 32px)); padding: 32px 24px;
+      border: 2px dashed #454550; border-radius: 14px; text-align: center;
+      background: #18181f; z-index: 2;
+    }
+    #drop-zone.dragging { border-color: #ff4757; background: #202028; }
+    .muted { color: #a1a1ad; }
+    button, .file-button {
+      display: inline-block; margin: 8px 4px 0; padding: 10px 15px;
+      border: 0; border-radius: 7px; color: white; background: #ff4757;
+      font-weight: 650; cursor: pointer;
+    }
+    button.secondary { background: #30303b; border: 1px solid #4b4b58; }
+    button:disabled { opacity: .55; cursor: wait; }
+    #loading-status { margin-top: 16px; color: #00ffcc; font-family: monospace; }
+    #canvas {
+      display: none; position: fixed; inset: 0; width: 100vw; height: 100vh;
+      background: #000; outline: none; z-index: 1;
+    }
+    #fs-btn {
+      display: none; position: fixed; right: 12px; top: 10px; z-index: 20;
+      margin: 0; font: 12px monospace;
+    }
+    #debug-hint {
+      position: fixed; right: 10px; bottom: 5px; z-index: 30;
+      color: #888; font: 11px monospace; pointer-events: none;
+    }
+    #debug-overlay {
+      display: none; position: fixed; z-index: 50; left: 12px; right: 12px;
+      bottom: 14px; height: min(290px, 42vh); padding: 10px;
+      border: 1px solid #ff4757; border-radius: 8px; background: #0b0b10f5;
+      box-shadow: 0 10px 30px #000b; font: 12px/1.45 monospace;
+    }
+    #debug-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #333; padding-bottom: 7px; }
+    #debug-header button { margin: 0; padding: 5px 8px; font: inherit; }
+    .tabs { display: flex; gap: 5px; }
+    .tab-btn { background: #22222b; border: 1px solid #454550; color: #bbb; }
+    .tab-btn.active { background: #ff4757; color: white; }
+    .debug-tab-content { display: none; overflow: auto; height: calc(100% - 42px); padding-top: 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .debug-tab-content.active { display: block; }
+    .error-log { color: #ff6b78; }
+    .ok-log { color: #00ffcc; }
+  </style>
+</head>
+<body>
+  <div id="version-tag">v1.21</div>
+  <button id="fs-btn" type="button">[⤢] Fullscreen</button>
+
+  <main id="drop-zone">
+    <h1>LÖVE Web Executor</h1>
+    <p class="muted">Choose or drop a <code>.love</code> package to run it.</p>
+    <p class="muted">Diagnostics are built in. Type <code>debug</code> to toggle the log.</p>
+    <input id="file-input" type="file" accept=".love,.zip" hidden>
+    <button id="choose-btn" type="button">Select .love file</button>
+    <button id="check-btn" class="secondary" type="button">Check engine files</button>
+    <div id="loading-status" role="status" aria-live="polite"></div>
+  </main>
+
+  <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+  <div id="debug-hint">Type "debug" to toggle diagnostics</div>
+  <section id="debug-overlay" aria-label="Debug console">
+    <div id="debug-header">
+      <div class="tabs">
+        <button id="tab-sys-btn" class="tab-btn active" type="button">System</button>
+        <button id="tab-game-btn" class="tab-btn" type="button">Engine output</button>
+      </div>
+      <button id="close-debug" class="secondary" type="button">Close</button>
+    </div>
+    <div id="tab-sys" class="debug-tab-content active"></div>
+    <div id="tab-game" class="debug-tab-content"></div>
+  </section>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  const dropZone = $('drop-zone');
+  const fileInput = $('file-input');
+  const status = $('loading-status');
+  const canvas = $('canvas');
+  const fsButton = $('fs-btn');
+  const sysLog = $('tab-sys');
+  const gameLog = $('tab-game');
+  let selectedFile = null;
+  let playerScriptPromise = null;
+  let keyBuffer = '';
+
+  function appendLog(target, message, isError = false) {
+    const line = document.createElement('div');
+    if (isError) line.className = 'error-log';
+    else if (/PASS|success|resolved|available|loaded/i.test(message)) line.className = 'ok-log';
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+    target.appendChild(line);
+    target.scrollTop = target.scrollHeight;
+  }
+  function log(message, error = false) { appendLog(sysLog, message, error); console[error ? 'error' : 'log']('[Executor] ' + message); }
+  function game(message, error = false) { appendLog(gameLog, message, error); console[error ? 'error' : 'log']('[LÖVE] ' + message); }
+  function showDebug(show = true) { $('debug-overlay').style.display = show ? 'block' : 'none'; }
+  function switchTab(name) {
+    $('tab-sys-btn').classList.toggle('active', name === 'sys');
+    $('tab-game-btn').classList.toggle('active', name === 'game');
+    $('tab-sys').classList.toggle('active', name === 'sys');
+    $('tab-game').classList.toggle('active', name === 'game');
+  }
+  function setStatus(text) { status.style.display = text ? 'block' : 'none'; status.textContent = text; }
+
+  window.addEventListener('error', e => {
+    log(`Browser error: ${e.message || 'unknown'}${e.filename ? ` (${e.filename}:${e.lineno})` : ''}`, true);
+  });
+  window.addEventListener('unhandledrejection', e => {
+    const reason = e.reason && (e.reason.stack || e.reason.message) || String(e.reason);
+    log('Unhandled promise rejection: ' + reason, true);
+  });
+  const originalConsoleError = console.error.bind(console);
+  console.error = (...args) => { game(args.map(String).join(' '), true); originalConsoleError(...args); };
+  const originalConsoleWarn = console.warn.bind(console);
+  console.warn = (...args) => { game('Warning: ' + args.map(String).join(' ')); originalConsoleWarn(...args); };
+
+  async function checkAsset(path) {
+    const url = new URL(path, document.baseURI).href;
+    try {
+      const response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+      if (!response.ok) {
+        log(`FAIL ${path}: HTTP ${response.status}. Check the filename, case, and GitHub Pages folder.`, true);
+        return false;
+      }
+      const type = response.headers.get('content-type') || '(no content-type header)';
+      if (path.endsWith('.wasm')) {
+        // Read only the first streamed chunk, then cancel; don't accidentally download a huge WASM file.
+        const probe = await fetch(url, { headers: { 'Range': 'bytes=0-7' }, cache: 'no-store' });
+        if (!probe.ok || !probe.body) {
+          log(`FAIL ${path}: could not read a small WASM signature probe (HTTP ${probe.status}).`, true);
+          return false;
+        }
+        const reader = probe.body.getReader();
+        const chunk = await reader.read();
+        await reader.cancel();
+        const bytes = chunk.value || new Uint8Array();
+        if (bytes.length < 4 || !(bytes[0] === 0 && bytes[1] === 97 && bytes[2] === 115 && bytes[3] === 109)) {
+          log(`FAIL ${path}: response does not start with the WASM signature; it may be an HTML 404 page.`, true);
+          return false;
+        }
+      }
+      log(`PASS ${path}: HTTP ${response.status}, ${type}.`);
+      return true;
+    } catch (err) {
+      log(`FAIL ${path}: ${err.message}. Check the published URL and browser Network tab.`, true);
+      return false;
+    }
+  }
+
+  async function checkEngineFiles() {
+    showDebug(true); switchTab('sys');
+    log('Checking assets relative to: ' + document.baseURI);
+    log('Cross-origin isolated: ' + String(window.crossOriginIsolated) + '; SharedArrayBuffer available: ' + String(typeof SharedArrayBuffer !== 'undefined'));
+    if (!window.crossOriginIsolated) {
+      log('NOTICE: GitHub Pages normally cannot set custom COOP/COEP headers. Some threaded love.js builds require cross-origin isolation and may fail even when all files exist.', true);
+    }
+    const paths = ['player.js', '11.5/love.js', '11.5/love.wasm', 'lua/normalize1.lua', 'lua/normalize2.lua'];
+    const results = await Promise.all(paths.map(checkAsset));
+    if (results.every(Boolean)) log('All required files responded. This checks paths, not whether the game itself is compatible.');
+    else log('One or more engine assets failed. Fix these paths before testing the game.', true);
+  }
+
+  function loadPlayerScript() {
+    if (playerScriptPromise) return playerScriptPromise;
+    playerScriptPromise = new Promise((resolve, reject) => {
+      // "g=norun" makes upstream player.js define Player without launching its placeholder game.
+      const script = document.createElement('script');
+      script.src = new URL('player.js?g=norun', document.baseURI).href;
+      script.onload = () => {
+        if (!window.Player || typeof window.Player.start !== 'function') {
+          reject(new Error('player.js loaded, but its Player API was not found.'));
+          return;
+        }
+        resolve(window.Player);
+      };
+      script.onerror = () => reject(new Error('Could not load player.js. Check the asset check and exact filename case.'));
+      document.head.appendChild(script);
+    });
+    return playerScriptPromise;
+  }
+
+  async function runGame(file) {
+    if (!file) return;
+    if (!/\.love$|\.zip$/i.test(file.name)) {
+      log('Please choose a .love or .zip package.', true);
+      return;
+    }
+    selectedFile = file;
+    dropZone.style.display = 'none';
+    canvas.style.display = 'block';
+    fsButton.style.display = 'block';
+    canvas.width = 1280;
+    canvas.height = 720;
+    showDebug(true);
+    switchTab('sys');
+    setStatus(`Reading ${file.name} (${(file.size / 1048576).toFixed(2)} MiB)…`);
+    log(`Selected package: ${file.name}, ${file.size} bytes.`);
+    log('GitHub Pages deployment detected: using the upstream player.js startup path.');
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const data = new Uint8Array(buffer);
+      if (data.length < 4 || data[0] !== 0x50 || data[1] !== 0x4b) {
+        throw new Error('The selected file does not start with a ZIP signature. A .love file is normally a ZIP archive; it may be corrupt or incorrectly renamed.');
+      }
+      log('Package ZIP signature looks valid.');
+      const Player = await loadPlayerScript();
+
+      // Let the upstream player load its own support files and WASM. Only intercept
+      // the uploaded game package; this avoids guessing at Emscripten Module/FS internals.
+      const originalRequestPkg = Player.requestPkg.bind(Player);
+      const packageName = file.name;
+      Player.requestPkg = function(uri) {
+        if (uri === packageName) {
+          log(`Providing uploaded package "${packageName}" to player.js.`);
+          return Promise.resolve({ data, name: uri });
+        }
+        return originalRequestPkg(uri);
+      };
+
+      Player.cache = false;
+      log('Starting upstream Player with game package…');
+      setStatus('Loading LÖVE engine and game…');
+      Player.start(packageName, []);
+      log('Player.start() called. Waiting for engine/game output.');
+      setStatus('Engine startup requested. If it stays black, inspect Engine output and Network errors.');
+    } catch (err) {
+      log('Startup failed: ' + (err.stack || err.message || String(err)), true);
+      setStatus('Startup failed — open diagnostics for details.');
+    }
+  }
+
+  $('choose-btn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { if (fileInput.files && fileInput.files[0]) runGame(fileInput.files[0]); });
+  $('check-btn').addEventListener('click', checkEngineFiles);
+  $('tab-sys-btn').addEventListener('click', () => switchTab('sys'));
+  $('tab-game-btn').addEventListener('click', () => switchTab('game'));
+  $('close-debug').addEventListener('click', () => showDebug(false));
+  fsButton.addEventListener('click', async () => {
+    try {
+      if (canvas.requestFullscreen) await canvas.requestFullscreen();
+      canvas.focus();
+      log('Fullscreen requested.');
+    } catch (err) { log('Fullscreen failed: ' + err.message, true); }
+  });
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragging'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('dragging');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) runGame(e.dataTransfer.files[0]);
+  });
+  window.addEventListener('keydown', e => {
+    keyBuffer = (keyBuffer + e.key.toLowerCase()).slice(-5);
+    if (keyBuffer === 'debug') showDebug($('debug-overlay').style.display !== 'block');
+  });
+
+  log('LÖVE Web Executor v1.21 loaded.');
+  log('Click "Check engine files" first if the game screen is black.');
+  log('Expected layout: player.js, 11.5/love.js, 11.5/love.wasm, lua/normalize1.lua, lua/normalize2.lua.');
+})();
+</script>
+</body>
+</html>
