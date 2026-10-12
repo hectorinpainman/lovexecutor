@@ -116,7 +116,7 @@
 </head>
 <body>
 
-    <div id="version-tag">v1.14</div>
+    <div id="version-tag">v1.15</div>
 
     <div id="drop-zone" onclick="document.getElementById('file-input').click()">
         <h2>LÖVE Web Executor</h2>
@@ -216,7 +216,7 @@
             const reader = new FileReader();
             reader.onload = function(evt) {
                 const fileData = new Uint8Array(evt.target.result);
-                logToDebug("File read complete. Pre-configuring Emscripten Module...");
+                logToDebug("File read complete. Pre-configuring Engine...");
 
                 loadingStatus.style.display = 'none';
                 canvas.style.display = 'block';
@@ -225,7 +225,7 @@
                 canvas.width = 800;
                 canvas.height = 600;
 
-                window.Module = {
+                const engineConfig = {
                     canvas: canvas,
                     arguments: ['game.love'],
                     INITIAL_MEMORY: 268435456,
@@ -242,10 +242,16 @@
                     preRun: [function() {
                         logToDebug("Mounting 'game.love' to virtual filesystem...");
                         try {
-                            FS.createDataFile('/', 'game.love', fileData, true, true, true);
-                            logToDebug("Mount successful.");
+                            Love.FS.createDataFile('/', 'game.love', fileData, true, true, true);
+                            logToDebug("Mount successful!");
                         } catch (err) {
-                            logToDebug("FS Mount Error: " + err.message, true);
+                            // Fallback to standard FS if Love.FS isn't scoped
+                            if (typeof FS !== 'undefined') {
+                                FS.createDataFile('/', 'game.love', fileData, true, true, true);
+                                logToDebug("Mount successful via global FS!");
+                            } else {
+                                logToDebug("FS Mount Error: " + err.message, true);
+                            }
                         }
                     }],
                     locateFile: function(path) {
@@ -258,15 +264,16 @@
                 const script = document.createElement('script');
                 script.src = '11.5/love.js';
                 script.onload = function() {
-                    logToDebug("11.5/love.js loaded into DOM.");
+                    logToDebug("11.5/love.js loaded. Initializing Engine Promise...");
                     if (typeof window.Love === 'function') {
-                        logToDebug("Initializing via window.Love(window.Module)...");
-                        window.Love(window.Module);
-                    } else if (typeof window.love === 'function') {
-                        logToDebug("Initializing via window.love(window.Module)...");
-                        window.love(window.Module);
+                        // Call Love(config) and await the returned WASM Promise!
+                        window.Love(engineConfig).then(function(instance) {
+                            logToDebug("WASM Module Promise resolved successfully! Game running.");
+                        }).catch(function(err) {
+                            logToDebug("WASM Initialization Error: " + err, true);
+                        });
                     } else {
-                        logToDebug("Engine script auto-initialized via Emscripten Module window scope.");
+                        logToDebug("Error: window.Love constructor not found!", true);
                     }
                 };
                 script.onerror = function() {
