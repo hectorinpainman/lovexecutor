@@ -16,6 +16,7 @@
             justify-content: center;
             min-height: 100vh;
             margin: 0;
+            overflow: hidden;
         }
         #drop-zone {
             width: 400px;
@@ -26,6 +27,7 @@
             background: #18181f;
             cursor: pointer;
             transition: all 0.2s ease;
+            z-index: 10;
         }
         #drop-zone:hover {
             border-color: #ff4757;
@@ -46,6 +48,51 @@
             margin-top: 20px;
             color: #00ffcc;
             font-family: monospace;
+            z-index: 10;
+        }
+        
+        /* Floating Persistent Debug Console Style */
+        #debug-overlay {
+            display: none;
+            position: fixed;
+            bottom: 15px;
+            left: 15px;
+            right: 15px;
+            max-height: 220px;
+            background: rgba(10, 10, 15, 0.95);
+            border: 1px solid #ff4757;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            color: #00ffcc;
+            overflow-y: auto;
+            z-index: 999999;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.9);
+            backdrop-filter: blur(5px);
+            text-align: left;
+            pointer-events: auto;
+        }
+        .error-log {
+            color: #ff5252;
+        }
+        #debug-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #333;
+            padding-bottom: 6px;
+            margin-bottom: 8px;
+        }
+        #debug-hint {
+            position: fixed;
+            bottom: 5px;
+            right: 10px;
+            font-size: 10px;
+            color: #555;
+            z-index: 999998;
+            pointer-events: none;
+            font-family: monospace;
         }
     </style>
 </head>
@@ -60,18 +107,83 @@
 
     <div id="loading-status">Preparing game container...</div>
 
+    <!-- Persistent Debug UI Elements -->
+    <div id="debug-hint">Type 'debug' to toggle console</div>
+    <div id="debug-overlay">
+        <div id="debug-header">
+            <span style="font-weight: bold; color: #ff4757;">LÖVE RUNTIME DEBUG CONSOLE</span>
+            <button onclick="toggleDebug(false)" style="background: #222; border: 1px solid #444; color: #fff; padding: 2px 8px; border-radius: 4px; cursor: pointer;">Close [X]</button>
+        </div>
+        <div id="debug-logs"></div>
+    </div>
+
     <script>
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
         const loadingStatus = document.getElementById('loading-status');
 
-        // Check if the URL already has a game passed to it via player.js format
+        // Global logger array to catch logs before DOM is ready
+        window.debugLogBuffer = [];
+
+        function logToDebug(text, isError = false) {
+            const timeStr = new Date().toLocaleTimeString();
+            const logMsg = `[${timeStr}] ${text}`;
+            window.debugLogBuffer.push({ msg: logMsg, error: isError });
+            
+            const logsContainer = document.getElementById('debug-logs');
+            if (logsContainer) {
+                const div = document.createElement('div');
+                if (isError) div.className = 'error-log';
+                div.textContent = logMsg;
+                logsContainer.appendChild(div);
+                logsContainer.scrollTop = logsContainer.scrollHeight;
+            }
+            console.log(text);
+        }
+
+        // Catch general runtime JS errors
+        window.onerror = function(msg, url, line) {
+            logToDebug(`JS Error: ${msg} (line ${line})`, true);
+        };
+
+        // Hotkey detector for typing "debug"
+        let typedKeys = '';
+        window.addEventListener('keydown', (e) => {
+            typedKeys += e.key.toLowerCase();
+            if (typedKeys.length > 5) typedKeys = typedKeys.slice(-5);
+            if (typedKeys === 'debug') {
+                const overlay = document.getElementById('debug-overlay');
+                if (overlay) {
+                    const isVisible = overlay.style.display === 'block';
+                    toggleDebug(!isVisible);
+                }
+            }
+        });
+
+        function toggleDebug(show) {
+            const overlay = document.getElementById('debug-overlay');
+            if (overlay) {
+                overlay.style.display = show ? 'block' : 'none';
+                if (show) {
+                    // Populate buffered logs when opened
+                    const logsContainer = document.getElementById('debug-logs');
+                    logsContainer.innerHTML = '';
+                    window.debugLogBuffer.forEach(item => {
+                        const div = document.createElement('div');
+                        if (item.error) div.className = 'error-log';
+                        div.textContent = item.msg;
+                        logsContainer.appendChild(div);
+                    });
+                    logsContainer.scrollTop = logsContainer.scrollHeight;
+                }
+            }
+        }
+
+        // Check if loaded via URL params
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.has('g')) {
             dropZone.style.display = 'none';
-            const playerScript = document.createElement('script');
-            playerScript.src = 'player.js';
-            document.body.appendChild(playerScript);
+            loadPlayerScript();
         }
 
         dropZone.addEventListener('dragover', (e) => e.preventDefault());
@@ -92,16 +204,48 @@
             dropZone.style.display = 'none';
             loadingStatus.style.display = 'block';
             loadingStatus.textContent = `Booting up ${file.name}...`;
+            logToDebug(`Initializing load for file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
-            // Create a direct Object URL from the file — zero stack overflow risk, handles any file size!
             const blobUrl = URL.createObjectURL(file);
 
-            // Clear out body elements and prep the canvas that player.js looks for
-            document.body.innerHTML = '<canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>';
+            // Configure Module so Emscripten hooks into our debug console
+            window.Module = {
+                arguments: [file.name],
+                print: function(text) {
+                    logToDebug("Emscripten: " + text);
+                },
+                printErr: function(text) {
+                    logToDebug("Emscripten Error: " + text, true);
+                },
+                preRun: [function() {
+                    logToDebug("Virtual filesystem mounting active...");
+                }]
+            };
 
-            // Load player.js and point it to our file's object URL
+            // Wipe body for player.js canvas, but instantly restore our debug overlay so it stays on top
+            const oldLogsHTML = document.getElementById('debug-overlay').outerHTML;
+            const oldHintHTML = document.getElementById('debug-hint').outerHTML;
+
+            document.body.innerHTML = '<canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>' + oldLogsHTML + oldHintHTML;
+            
+            // Re-apply display state if it was open
+            document.getElementById('debug-overlay').style.display = 'block';
+            toggleDebug(true); // Auto-open debug console on load so you can watch what happens!
+
+            logToDebug("Injecting official player.js runtime...");
+            loadPlayerScript(blobUrl);
+        }
+
+        function loadPlayerScript(blobUrl) {
             const script = document.createElement('script');
-            script.src = 'player.js?g=' + encodeURIComponent(blobUrl) + '&n=1';
+            if (blobUrl) {
+                script.src = 'player.js?g=' + encodeURIComponent(blobUrl) + '&n=1';
+            } else {
+                script.src = 'player.js';
+            }
+            script.onerror = function() {
+                logToDebug("Failed to load player.js script!", true);
+            };
             document.body.appendChild(script);
         }
     </script>
