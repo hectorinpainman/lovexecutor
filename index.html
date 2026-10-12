@@ -14,7 +14,7 @@
       display: flex; align-items: center; justify-content: center;
     }
     #version-tag {
-      position: fixed; top: 10px; left: 10px; z-index: 100;
+      position: fixed; top: 10px; left: 10px; z-index: 10000;
       padding: 5px 8px; border: 1px solid #ff4757; border-radius: 5px;
       color: #ff6674; background: #ff47571c; font: 12px monospace;
     }
@@ -28,7 +28,7 @@
     button, .file-button {
       display: inline-block; margin: 8px 4px 0; padding: 10px 15px;
       border: 0; border-radius: 7px; color: white; background: #ff4757;
-      font-weight: 650; cursor: pointer;
+      font-weight: 650; cursor: pointer; z-index: 10000; position: relative;
     }
     button.secondary { background: #30303b; border: 1px solid #4b4b58; }
     button:disabled { opacity: .55; cursor: wait; }
@@ -38,21 +38,21 @@
       background: #000; outline: none; z-index: 1;
     }
     #fs-btn {
-      display: none; position: fixed; right: 12px; top: 10px; z-index: 20;
+      display: none; position: fixed; right: 12px; top: 10px; z-index: 10000;
       margin: 0; font: 12px monospace;
     }
     #debug-hint {
-      position: fixed; right: 10px; bottom: 5px; z-index: 30;
+      position: fixed; right: 10px; bottom: 5px; z-index: 10000;
       color: #888; font: 11px monospace; pointer-events: none;
     }
     #debug-overlay {
-      display: none; position: fixed; z-index: 50; left: 12px; right: 12px;
+      display: none; position: fixed; z-index: 20000; left: 12px; right: 12px;
       bottom: 14px; height: min(290px, 42vh); padding: 10px;
       border: 1px solid #ff4757; border-radius: 8px; background: #0b0b10f5;
       box-shadow: 0 10px 30px #000b; font: 12px/1.45 monospace;
     }
     #debug-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #333; padding-bottom: 7px; }
-    #debug-header button { margin: 0; padding: 5px 8px; font: inherit; }
+    #debug-header button { margin: 0; padding: 5px 8px; font: inherit; z-index: auto; }
     .tabs { display: flex; gap: 5px; }
     .tab-btn { background: #22222b; border: 1px solid #454550; color: #bbb; }
     .tab-btn.active { background: #ff4757; color: white; }
@@ -215,7 +215,7 @@
     canvas.width = 1280;
     canvas.height = 720;
     showDebug(true);
-    switchTab('sys');
+    switchTab('game'); // Automatically flip to Engine output so you can see it right away!
     setStatus(`Reading ${file.name} (${(file.size / 1048576).toFixed(2)} MiB)…`);
 
     try {
@@ -228,6 +228,17 @@
       }
       
       const Player = await loadPlayerScript();
+
+      // Hook Emscripten stdout/stderr so print() from Lua goes to the Engine output tab!
+      window.Module = window.Module || {};
+      window.Module.print = (text) => {
+        game(text);
+        console.log('[LÖVE print] ' + text);
+      };
+      window.Module.printErr = (text) => {
+        game(text, true);
+        console.error('[LÖVE err] ' + text);
+      };
 
       const originalRequestPkg = Player.requestPkg.bind(Player);
       const packageName = file.name;
