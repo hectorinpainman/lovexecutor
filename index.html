@@ -18,7 +18,6 @@
             margin: 0;
             overflow: hidden;
         }
-        /* Version Indicator Tag - Deployment 12 */
         #version-tag {
             position: fixed;
             top: 10px;
@@ -69,6 +68,8 @@
             display: none;
             background-color: #000;
             outline: none;
+            border-radius: 4px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
         }
         #debug-overlay {
             display: none;
@@ -115,7 +116,7 @@
 </head>
 <body>
 
-    <div id="version-tag">v1.12</div>
+    <div id="version-tag">v1.13</div>
 
     <div id="drop-zone" onclick="document.getElementById('file-input').click()">
         <h2>LÖVE Web Executor</h2>
@@ -170,9 +171,7 @@
             if (typedKeys.length > 5) typedKeys = typedKeys.slice(-5);
             if (typedKeys === 'debug') {
                 const overlay = document.getElementById('debug-overlay');
-                if (overlay) {
-                    toggleDebug(overlay.style.display !== 'block');
-                }
+                if (overlay) toggleDebug(overlay.style.display !== 'block');
             }
         });
 
@@ -211,22 +210,26 @@
 
             dropZone.style.display = 'none';
             loadingStatus.style.display = 'block';
-            loadingStatus.textContent = `Reading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)...`;
-            logToDebug(`Reading large file into memory: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+            loadingStatus.textContent = `Reading ${file.name}...`;
+            logToDebug(`Reading file into memory: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
             const reader = new FileReader();
             reader.onload = function(evt) {
                 const fileData = new Uint8Array(evt.target.result);
-                logToDebug("File read successfully into buffer. Initializing WebAssembly Module...");
+                logToDebug("File read complete. Pre-configuring Emscripten Module...");
 
                 loadingStatus.style.display = 'none';
                 canvas.style.display = 'block';
                 toggleDebug(true);
 
+                // Set default dimensions for canvas
+                canvas.width = 800;
+                canvas.height = 600;
+
                 window.Module = {
                     canvas: canvas,
                     arguments: ['game.love'],
-                    INITIAL_MEMORY: 268435456, // 256MB heap allocation for heavy games
+                    INITIAL_MEMORY: 268435456,
                     ALLOW_MEMORY_GROWTH: true,
                     print: function(text) {
                         logToDebug("Engine: " + text);
@@ -238,30 +241,34 @@
                         logToDebug("WASM Abort triggered: " + what, true);
                     },
                     preRun: [function() {
-                        logToDebug("Mounting 'game.love' to virtual Emscripten filesystem...");
+                        logToDebug("Mounting 'game.love' to virtual filesystem...");
                         try {
                             FS.createDataFile('/', 'game.love', fileData, true, true, true);
-                            logToDebug("Virtual mount of 'game.love' successful.");
+                            logToDebug("Mount successful. Spawning main loop...");
                         } catch (err) {
                             logToDebug("FS Mount Error: " + err.message, true);
                         }
                     }],
                     locateFile: function(path) {
-                        if (path.endsWith('.wasm')) {
-                            return '11.5/love.wasm';
-                        }
+                        if (path.endsWith('.wasm')) return '11.5/love.wasm';
                         return '11.5/' + path;
                     }
                 };
 
-                logToDebug("Loading 11.5/love.js engine script...");
+                logToDebug("Loading 11.5/love.js...");
                 const script = document.createElement('script');
                 script.src = '11.5/love.js';
                 script.onload = function() {
-                    logToDebug("11.5/love.js script execution completed.");
+                    logToDebug("11.5/love.js loaded into DOM. Triggering love(Module)...");
+                    if (typeof love === 'function') {
+                        love(window.Module);
+                        logToDebug("love(Module) main entrypoint executed successfully!");
+                    } else {
+                        logToDebug("Error: love engine entry function was not found in window scope!", true);
+                    }
                 };
                 script.onerror = function() {
-                    logToDebug("Failed to load 11.5/love.js script file!", true);
+                    logToDebug("Failed to fetch 11.5/love.js engine script!", true);
                 };
                 document.body.appendChild(script);
             };
