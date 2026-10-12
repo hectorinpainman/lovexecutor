@@ -41,6 +41,12 @@
             font-weight: bold;
             cursor: pointer;
         }
+        #loading-status {
+            display: none;
+            margin-top: 20px;
+            color: #00ffcc;
+            font-family: monospace;
+        }
     </style>
 </head>
 <body>
@@ -52,12 +58,22 @@
         <input type="file" id="file-input" accept=".love" style="display: none;">
     </div>
 
-    <!-- Hidden canvas container that player.js looks for -->
-    <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    <div id="loading-status">Preparing game container...</div>
 
     <script>
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
+        const loadingStatus = document.getElementById('loading-status');
+
+        // Check if the URL already has a game passed to it via player.js format
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('g')) {
+            dropZone.style.display = 'none';
+            // Load the official player script if a game is bound in the URL query
+            const playerScript = document.createElement('script');
+            playerScript.src = 'player.js';
+            document.body.appendChild(playerScript);
+        }
 
         dropZone.addEventListener('dragover', (e) => e.preventDefault());
         dropZone.addEventListener('drop', (e) => {
@@ -70,27 +86,52 @@
 
         function handleFile(file) {
             if (!file.name.endsWith('.love')) {
-                alert('Not a .love file!');
+                alert('Bruh, that is not a valid .love file.');
                 return;
             }
 
             dropZone.style.display = 'none';
+            loadingStatus.style.display = 'block';
+            loadingStatus.textContent = `Packaging ${file.name} into virtual stream...`;
 
-            // Create an object URL for the uploaded file so player.js can fetch it locally via virtual blob
-            const fileURL = URL.createObjectURL(file);
+            // Read file into an ArrayBuffer and store it temporarily in sessionStorage
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                try {
+                    // Store binary data in session storage to pass across the reload boundary
+                    const base64Data = btoa(
+                        String.fromCharCode.apply(null, new Uint8Array(evt.target.result))
+                    );
+                    sessionStorage.setItem('love_game_data', base64Data);
+                    sessionStorage.setItem('love_game_name', file.name);
 
-            // Dynamically inject the official player.js with the game parameter pointed at our blob URL
-            window.Module = {
-                arguments: [file.name],
-                preRun: [function() {
-                    FS.createDataFile('/', 'game.love', file, true, true, true);
-                }]
+                    loadingStatus.textContent = 'Booting up LÖVE Web Runtime...';
+                    
+                    // Reload page with player.js parameters, letting player.js pull from session data or standard load
+                    // Alternatively, we can inject player.js directly with the blob URL:
+                    const blob = new Blob([evt.target.result], { type: 'application/octet-stream' });
+                    const blobUrl = URL.createObjectURL(blob);
+                    
+                    // Clear out body elements and let player.js take over the DOM completely
+                    document.body.innerHTML = '<canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>';
+                    
+                    window.Module = {
+                        arguments: [file.name],
+                        preRun: [function() {
+                            FS.createDataFile('/', file.name, new Uint8Array(evt.target.result), true, true, true);
+                        }]
+                    };
+
+                    const script = document.createElement('script');
+                    script.src = 'player.js?g=' + encodeURIComponent(blobUrl) + '&n=1';
+                    document.body.appendChild(script);
+
+                } catch (err) {
+                    loadingStatus.textContent = 'Error loading game: ' + err.message;
+                    loadingStatus.style.color = '#ff5252';
+                }
             };
-
-            // Alternatively, setting up the search parameter trick that player.js natively reads:
-            const script = document.createElement('script');
-            script.src = 'player.js?g=' + encodeURIComponent(fileURL);
-            document.body.appendChild(script);
+            reader.readAsArrayBuffer(file);
         }
     </script>
 </body>
