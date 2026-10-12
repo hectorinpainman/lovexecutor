@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LÖVE Web Executor v1.21</title>
+  <title>LÖVE Web Executor v1.28</title>
   <link rel="stylesheet" href="style.css">
   <style>
     :root { color-scheme: dark; }
@@ -63,7 +63,7 @@
   </style>
 </head>
 <body>
-  <div id="version-tag">v1.21</div>
+  <div id="version-tag">v1.28</div>
   <button id="fs-btn" type="button">[⤢] Fullscreen</button>
 
   <main id="drop-zone">
@@ -215,7 +215,7 @@
     canvas.width = 1280;
     canvas.height = 720;
     showDebug(true);
-    switchTab('game'); // Automatically flip to Engine output so you can see it right away!
+    switchTab('game');
     setStatus(`Reading ${file.name} (${(file.size / 1048576).toFixed(2)} MiB)…`);
 
     try {
@@ -229,7 +229,6 @@
       
       const Player = await loadPlayerScript();
 
-      // Hook Emscripten stdout/stderr so print() from Lua goes to the Engine output tab!
       window.Module = window.Module || {};
       window.Module.print = (text) => {
         game(text);
@@ -238,6 +237,10 @@
       window.Module.printErr = (text) => {
         game(text, true);
         console.error('[LÖVE err] ' + text);
+      };
+      window.Module.onRuntimeInitialized = () => {
+        log('Emscripten runtime initialized successfully.');
+        game('Runtime initialized.');
       };
 
       const originalRequestPkg = Player.requestPkg.bind(Player);
@@ -283,7 +286,7 @@
     if (keyBuffer === 'debug') showDebug($('debug-overlay').style.display !== 'block');
   });
 
-  log('LÖVE Web Executor v1.21 loaded.');
+  log('LÖVE Web Executor v1.28 loaded.');
   log('Click "Check engine files" first if the game screen is black.');
   log('Expected layout: player.js, 11.5/love.js, 11.5/love.wasm, lua/normalize1.lua, lua/normalize2.lua.');
 })();
