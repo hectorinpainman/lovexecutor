@@ -167,7 +167,7 @@
 </head>
 <body>
 
-    <div id="version-tag">v1.18</div>
+    <div id="version-tag">v1.19</div>
     <button id="fs-btn" onclick="goFullscreen()">[⤢] Fullscreen Canvas</button>
 
     <div id="drop-zone" onclick="document.getElementById('file-input').click()">
@@ -185,7 +185,7 @@
         <div id="debug-header">
             <div>
                 <button id="tab-sys-btn" class="tab-btn active" onclick="switchTab('sys')">System Console</button>
-                <button id="tab-game-btn" class="tab-btn" onclick="switchTab('game')">Game Output (Lua)</button>
+                <button id="tab-game-btn" class="tab-btn" onclick="switchTab('game')">Game Output</button>
             </div>
             <button onclick="toggleDebug(false)" style="background: #222; border: 1px solid #444; color: #fff; padding: 2px 8px; border-radius: 4px; cursor: pointer;">Close [X]</button>
         </div>
@@ -200,26 +200,17 @@
         const canvas = document.getElementById('canvas');
         const fsBtn = document.getElementById('fs-btn');
 
-        window.sysLogBuffer = [];
-        window.gameLogBuffer = [];
-
         function logToSys(text, isError = false) {
             const timeStr = new Date().toLocaleTimeString();
-            const logMsg = `[${timeStr}] ${text}`;
-            window.sysLogBuffer.push({ msg: logMsg, error: isError });
-            appendLog('tab-sys', logMsg, isError);
-            console.log(text);
+            appendLog('tab-sys', `[${timeStr}] ${text}`, isError);
+            console.log("Sys: " + text);
         }
 
         function logToGame(text, isError = false) {
             const timeStr = new Date().toLocaleTimeString();
-            const logMsg = `[${timeStr}] ${text}`;
-            window.gameLogBuffer.push({ msg: logMsg, error: isError });
-            appendLog('tab-game', logMsg, isError);
-            
-            // Auto-switch to Game tab if Lua throws a runtime error!
+            appendLog('tab-game', `[${timeStr}] ${text}`, isError);
             if (isError) switchTab('game');
-            console.log("GameLog: " + text);
+            console.log("Game: " + text);
         }
 
         function appendLog(targetId, msg, isError) {
@@ -239,33 +230,6 @@
             document.getElementById('tab-sys').classList.toggle('active', tabName === 'sys');
             document.getElementById('tab-game').classList.toggle('active', tabName === 'game');
         }
-
-        // Catch console errors and route them to the Game tab if they mention boot.lua or love engine
-        const origConsoleErr = console.error;
-        console.error = function(...args) {
-            const str = args.join(' ');
-            if (str.includes('[love') || str.includes('boot.lua') || str.includes('Error:')) {
-                logToGame("Lua Exception: " + str, true);
-            } else {
-                logToSys("Console Error: " + str, true);
-            }
-            origConsoleErr.apply(console, args);
-        };
-
-        const origConsoleLog = console.log;
-        console.log = function(...args) {
-            const str = args.join(' ');
-            if (str.startsWith('GameLog:')) {
-                origConsoleLog.apply(console, args);
-                return;
-            }
-            if (str.includes('[love') || str.includes('boot.lua')) {
-                logToGame(str, false);
-            } else {
-                logToSys(str, false);
-            }
-            origConsoleLog.apply(console, args);
-        };
 
         window.onerror = function(msg, url, line) {
             logToSys(`JS Error: ${msg} (line ${line})`, true);
@@ -335,7 +299,7 @@
                     INITIAL_MEMORY: 268435456,
                     ALLOW_MEMORY_GROWTH: true,
                     print: function(text) {
-                        logToGame(text);
+                        logToGame(text, false);
                     },
                     printErr: function(text) {
                         logToGame(text, true);
@@ -367,7 +331,6 @@
                     if (typeof window.Love === 'function') {
                         window.Love(engineConfig).then(function(instance) {
                             logToSys("WASM Module Promise resolved successfully! Engine active.");
-                            logToGame("LÖVE 11.5 Lua State initialized.");
                         }).catch(function(err) {
                             logToSys("WASM Initialization Error: " + err, true);
                         });
