@@ -115,8 +115,6 @@
     target.scrollTop = target.scrollHeight;
   }
   function log(message, error = false) { appendLog(sysLog, message, error); console[error ? 'error' : 'log']('[Executor] ' + message); }
-  
-  // FIX: game() only appends to the UI panel now to avoid the recursive loop with console.error overrides
   function game(message, error = false) { appendLog(gameLog, message, error); }
 
   function showDebug(show = true) { $('debug-overlay').style.display = show ? 'block' : 'none'; }
@@ -203,11 +201,13 @@
   }
 
   async function runGame(file) {
-    if (!file) return;
-    if (!/\.love$\vert{}\.zip$/i.test(file.name)) {
-      log('Please choose a .love or .zip package.', true);
+    if (!file) {
+      log('runGame received no file object.', true);
       return;
     }
+    
+    log(`Received file: "${file.name}" (size: ${file.size} bytes, type: "${file.type}")`);
+
     selectedFile = file;
     dropZone.style.display = 'none';
     canvas.style.display = 'block';
@@ -217,23 +217,23 @@
     showDebug(true);
     switchTab('sys');
     setStatus(`Reading ${file.name} (${(file.size / 1048576).toFixed(2)} MiB)…`);
-    log(`Selected package: ${file.name}, ${file.size} bytes.`);
-    log('GitHub Pages deployment detected: using the upstream player.js startup path.');
 
     try {
       const buffer = await file.arrayBuffer();
       const data = new Uint8Array(buffer);
       if (data.length < 4 || data[0] !== 0x50 || data[1] !== 0x4b) {
-        throw new Error('The selected file does not start with a ZIP signature. A .love file is normally a ZIP archive; it may be corrupt or incorrectly renamed.');
+        log('WARNING: File does not start with standard ZIP/PK headers.', true);
+      } else {
+        log('Package ZIP signature looks valid.');
       }
-      log('Package ZIP signature looks valid.');
+      
       const Player = await loadPlayerScript();
 
       const originalRequestPkg = Player.requestPkg.bind(Player);
       const packageName = file.name;
       Player.requestPkg = function(uri) {
-        if (uri === packageName) {
-          log(`Providing uploaded package "${packageName}" to player.js.`);
+        if (uri === packageName || uri.endsWith('.love') || uri.endsWith('.zip')) {
+          log(`Providing uploaded package "${file.name}" to player.js as "${uri}".`);
           return Promise.resolve({ data, name: uri });
         }
         return originalRequestPkg(uri);
@@ -244,7 +244,6 @@
       setStatus('Loading LÖVE engine and game…');
       Player.start(packageName, []);
       log('Player.start() called. Waiting for engine/game output.');
-      setStatus('Engine startup requested. If it stays black, inspect Engine output and Network errors.');
     } catch (err) {
       log('Startup failed: ' + (err.stack || err.message || String(err)), true);
       setStatus('Startup failed — open diagnostics for details.');
@@ -254,8 +253,7 @@
   $('choose-btn').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => { if (fileInput.files && fileInput.files[0]) runGame(fileInput.files[0]); });
   $('check-btn').addEventListener('click', checkEngineFiles);$('tab-sys-btn').addEventListener('click', () => switchTab('sys'));
-  $('tab-game-btn').addEventListener('click', () => switchTab('game'));$('close-debug').append?.('click', () => showDebug(false));
-  $('close-debug').addEventListener('click', () => showDebug(false));
+  $('tab-game-btn').addEventListener('click', () => switchTab('game'));$('close-debug').addEventListener('click', () => showDebug(false));
   fsButton.addEventListener('click', async () => {
     try {
       if (canvas.requestFullscreen) await canvas.requestFullscreen();
