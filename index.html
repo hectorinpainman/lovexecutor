@@ -69,7 +69,6 @@
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.has('g')) {
             dropZone.style.display = 'none';
-            // Load the official player script if a game is bound in the URL query
             const playerScript = document.createElement('script');
             playerScript.src = 'player.js';
             document.body.appendChild(playerScript);
@@ -92,46 +91,18 @@
 
             dropZone.style.display = 'none';
             loadingStatus.style.display = 'block';
-            loadingStatus.textContent = `Packaging ${file.name} into virtual stream...`;
+            loadingStatus.textContent = `Booting up ${file.name}...`;
 
-            // Read file into an ArrayBuffer and store it temporarily in sessionStorage
-            const reader = new FileReader();
-            reader.onload = function(evt) {
-                try {
-                    // Store binary data in session storage to pass across the reload boundary
-                    const base64Data = btoa(
-                        String.fromCharCode.apply(null, new Uint8Array(evt.target.result))
-                    );
-                    sessionStorage.setItem('love_game_data', base64Data);
-                    sessionStorage.setItem('love_game_name', file.name);
+            // Create a direct Object URL from the file — zero stack overflow risk, handles any file size!
+            const blobUrl = URL.createObjectURL(file);
 
-                    loadingStatus.textContent = 'Booting up LÖVE Web Runtime...';
-                    
-                    // Reload page with player.js parameters, letting player.js pull from session data or standard load
-                    // Alternatively, we can inject player.js directly with the blob URL:
-                    const blob = new Blob([evt.target.result], { type: 'application/octet-stream' });
-                    const blobUrl = URL.createObjectURL(blob);
-                    
-                    // Clear out body elements and let player.js take over the DOM completely
-                    document.body.innerHTML = '<canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>';
-                    
-                    window.Module = {
-                        arguments: [file.name],
-                        preRun: [function() {
-                            FS.createDataFile('/', file.name, new Uint8Array(evt.target.result), true, true, true);
-                        }]
-                    };
+            // Clear out body elements and prep the canvas that player.js looks for
+            document.body.innerHTML = '<canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>';
 
-                    const script = document.createElement('script');
-                    script.src = 'player.js?g=' + encodeURIComponent(blobUrl) + '&n=1';
-                    document.body.appendChild(script);
-
-                } catch (err) {
-                    loadingStatus.textContent = 'Error loading game: ' + err.message;
-                    loadingStatus.style.color = '#ff5252';
-                }
-            };
-            reader.readAsArrayBuffer(file);
+            // Load player.js and point it to our file's object URL
+            const script = document.createElement('script');
+            script.src = 'player.js?g=' + encodeURIComponent(blobUrl) + '&n=1';
+            document.body.appendChild(script);
         }
     </script>
 </body>
