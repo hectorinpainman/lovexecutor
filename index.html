@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LÖVE Web Executor v1.28</title>
+  <title>LÖVE Web Executor v1.29</title>
   <link rel="stylesheet" href="style.css">
   <style>
     :root { color-scheme: dark; }
@@ -63,7 +63,7 @@
   </style>
 </head>
 <body>
-  <div id="version-tag">v1.28</div>
+  <div id="version-tag">v1.29</div>
   <button id="fs-btn" type="button">[⤢] Fullscreen</button>
 
   <main id="drop-zone">
@@ -95,6 +95,12 @@
   'use strict';
 
   const $ = id => document.getElementById(id);
+  // untouched console functions (our own log lines must not be echoed into the engine tab)
+  const orig = { log: console.log.bind(console), warn: console.warn.bind(console), error: console.error.bind(console) };
+  const ENGINE_MEMORY = 536870912;   // 512 MB. player.js would pick only ~247 MB for a 56 MB package.
+  const ASSET_TIMEOUT_MS = 60000;    // player.js has no timeout/catch, so a stalled download hangs forever
+  let started = false;
+  let currentStage = 'idle';
   const dropZone = $('drop-zone');
   const fileInput = $('file-input');
   const status = $('loading-status');
@@ -112,9 +118,11 @@
     else if (/PASS|success|resolved|available|loaded/i.test(message)) line.className = 'ok-log';
     line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
     target.appendChild(line);
+    while (target.childElementCount > 600) target.removeChild(target.firstChild);   // engine can be chatty
     target.scrollTop = target.scrollHeight;
   }
-  function log(message, error = false) { appendLog(sysLog, message, error); console[error ? 'error' : 'log']('[Executor] ' + message); }
+  function log(message, error = false) { appendLog(sysLog, message, error); orig[error ? 'error' : 'log']('[Executor] ' + message); }
+  function stage(text) { currentStage = text; log('» ' + text); }
   function game(message, error = false) { appendLog(gameLog, message, error); }
 
   function showDebug(show = true) { $('debug-overlay').style.display = show ? 'block' : 'none'; }
@@ -132,10 +140,11 @@
     log('Unhandled promise rejection: ' + reason, true);
   });
   
-  const originalConsoleError = console.error.bind(console);
-  console.error = (...args) => { game(args.map(String).join(' '), true); originalConsoleError(...args); };
-  const originalConsoleWarn = console.warn.bind(console);
-  console.warn = (...args) => { game('Warning: ' + args.map(String).join(' ')); originalConsoleWarn(...args); };
+  // The engine sets Module.print = console.log and Module.warn = console.warn when it starts,
+  // so mirroring these three into the "Engine output" tab is how LÖVE/Balatro output reaches the page.
+  console.log = (...args) => { game(args.map(String).join(' ')); orig.log(...args); };
+  console.error = (...args) => { game(args.map(String).join(' '), true); orig.error(...args); };
+  console.warn = (...args) => { game('Warning: ' + args.map(String).join(' ')); orig.warn(...args); };
 
   async function checkAsset(path) {
     const url = new URL(path, document.baseURI).href;
@@ -172,10 +181,7 @@
   async function checkEngineFiles() {
     showDebug(true); switchTab('sys');
     log('Checking assets relative to: ' + document.baseURI);
-    log('Cross-origin isolated: ' + String(window.crossOriginIsolated) + '; SharedArrayBuffer available: ' + String(typeof SharedArrayBuffer !== 'undefined'));
-    if (!window.crossOriginIsolated) {
-      log('NOTICE: GitHub Pages normally cannot set custom COOP/COEP headers. Some threaded love.js builds require cross-origin isolation and may fail even when all files exist.', true);
-    }
+    log('Cross-origin isolated: ' + String(window.crossOriginIsolated) + ' (fine - this single-threaded engine build does not need it).');
     const paths = ['player.js', '11.5/love.js', '11.5/love.wasm', 'lua/normalize1.lua', 'lua/normalize2.lua'];
     const results = await Promise.all(paths.map(checkAsset));
     if (results.every(Boolean)) log('All required files responded. This checks paths, not whether the game itself is compatible.');
@@ -200,14 +206,19 @@
     return playerScriptPromise;
   }
 
-  async function runGame(file) {
-    if (!file) {
-      log('runGame received no file object.', true);
-      return;
-    }
-    
-    log(`Received file: "${file.name}" (size: ${file.size} bytes, type: "${file.type}")`);
+  function withTimeout(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`${label} did not finish within ${ms / 1000} s`)), ms);
+      promise.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+    });
+  }
 
+  async function runGame(file) {
+    if (!file) { log('runGame received no file object.', true); return; }
+    if (started) { log('Already started - reload the page to load a different file.', true); return; }
+    started = true;
+
+    log(`Received file: "${file.name}" (size: ${file.size} bytes, type: "${file.type}")`);
     selectedFile = file;
     dropZone.style.display = 'none';
     canvas.style.display = 'block';
@@ -215,49 +226,108 @@
     canvas.width = 1280;
     canvas.height = 720;
     showDebug(true);
-    switchTab('game');
-    setStatus(`Reading ${file.name} (${(file.size / 1048576).toFixed(2)} MiB)…`);
+    switchTab('sys');
+    stage(`reading ${file.name} (${(file.size / 1048576).toFixed(2)} MiB)`);
 
     try {
-      const buffer = await file.arrayBuffer();
-      const data = new Uint8Array(buffer);
+      const data = new Uint8Array(await file.arrayBuffer());
       if (data.length < 4 || data[0] !== 0x50 || data[1] !== 0x4b) {
         log('WARNING: File does not start with standard ZIP/PK headers.', true);
       } else {
         log('Package ZIP signature looks valid.');
       }
-      
+
+      checkEngineFiles();   // runs in parallel; logs PASS/FAIL for every engine file
+
+      stage('loading player.js');
       const Player = await loadPlayerScript();
+      const spinnerEl = document.getElementById('spinner');
 
       window.Module = window.Module || {};
-      window.Module.print = (text) => {
-        game(text);
-        console.log('[LÖVE print] ' + text);
-      };
-      window.Module.printErr = (text) => {
-        game(text, true);
-        console.error('[LÖVE err] ' + text);
-      };
-      window.Module.onRuntimeInitialized = () => {
-        log('Emscripten runtime initialized successfully.');
-        game('Runtime initialized.');
-      };
+      // player.js assigns Module.INITIAL_MEMORY itself; make that assignment a no-op and force our value.
+      Object.defineProperty(window.Module, 'INITIAL_MEMORY', { configurable: true, get: () => ENGINE_MEMORY, set: () => {} });
+      window.Module.onRuntimeInitialized = () => { log('Emscripten runtime initialized successfully.'); };
 
-      const originalRequestPkg = Player.requestPkg.bind(Player);
+      // --- instrument player.js so nothing can fail silently -------------------------------
       const packageName = file.name;
-      Player.requestPkg = function(uri) {
-        if (uri === packageName || uri.endsWith('.love') || uri.endsWith('.zip')) {
-          log(`Providing uploaded package "${file.name}" to player.js as "${uri}".`);
+      const pending = new Set();
+      const originalRequestPkg = Player.requestPkg.bind(Player);
+      Player.requestPkg = function (uri) {
+        if (uri === packageName) {
+          log(`Providing uploaded package "${file.name}" to player.js (${(data.length / 1048576).toFixed(2)} MiB).`);
           return Promise.resolve({ data, name: uri });
         }
-        return originalRequestPkg(uri);
+        const t0 = performance.now();
+        pending.add(uri);
+        log(`Fetching ${uri} ...`);
+        return withTimeout(originalRequestPkg(uri), ASSET_TIMEOUT_MS, `Fetching ${uri}`).then(pkg => {
+          pending.delete(uri);
+          log(`Fetched ${uri}: ${(pkg.data.length / 1048576).toFixed(2)} MiB in ${Math.round(performance.now() - t0)} ms`);
+          return pkg;
+        }, err => {
+          pending.delete(uri);
+          log(`FAILED to fetch ${uri}: ${err && err.message || err}`, true);
+          throw err;
+        });
       };
 
+      const originalRequestPkgs = Player.requestPkgs.bind(Player);
+      Player.requestPkgs = function (uri) {
+        if (uri === 'nogame.love') {   // player.js retries with this placeholder after any failure; it only adds noise
+          log('Not retrying: player.js falls back to a placeholder game after a failure. The real error is above.', true);
+          return new Promise(() => {});
+        }
+        stage('downloading engine files (love.wasm + lua helpers)');
+        return originalRequestPkgs(uri).then(cache => {
+          stage('engine files ready');
+          return cache;
+        }, err => {
+          stage('FAILED while downloading engine files');
+          log('Engine download failed: ' + (err && err.message || err), true);
+          throw err;
+        });
+      };
+
+      Player.script = function (src, func) {
+        stage(`loading ${src}`);
+        const s = document.createElement('script');
+        s.type = 'text/javascript';
+        s.src = src;
+        s.async = true;
+        s.onload = function () {
+          stage('engine script loaded - starting engine (compiling wasm, syncing save data)');
+          func();
+        };
+        s.onerror = function () {
+          stage(`FAILED to load ${src}`);
+          log(`Could not load ${src}. Check that the file exists at that exact path and case.`, true);
+        };
+        document.body.appendChild(s);
+      };
+
+      // --- watchdog: tells you where it is stuck instead of spinning silently -------------------
+      const t0 = performance.now();
+      let warned = false;
+      const timer = setInterval(() => {
+        const secs = Math.round((performance.now() - t0) / 1000);
+        if (spinnerEl && spinnerEl.className === '') {
+          clearInterval(timer);
+          stage(`engine is running (took ${secs} s). LÖVE/Balatro output now appears in the "Engine output" tab.`);
+          switchTab('game');
+        } else if (spinnerEl && spinnerEl.className === 'error') {
+          clearInterval(timer);
+          log('player.js reported an error - look for red lines above.', true);
+        } else if (!warned && secs >= 25) {
+          warned = true;
+          log(`Still waiting after ${secs} s. Last stage: "${currentStage}". Still downloading: ${[...pending].join(', ') || 'nothing'}.`, true);
+        }
+      }, 250);
+
       Player.cache = false;
-      log('Starting upstream Player with game package…');
       setStatus('Loading LÖVE engine and game…');
+      stage('starting player');
       Player.start(packageName, []);
-      log('Player.start() called. Waiting for engine/game output.');
+      log('Player.start() called.');
     } catch (err) {
       log('Startup failed: ' + (err.stack || err.message || String(err)), true);
       setStatus('Startup failed — open diagnostics for details.');
@@ -286,7 +356,7 @@
     if (keyBuffer === 'debug') showDebug($('debug-overlay').style.display !== 'block');
   });
 
-  log('LÖVE Web Executor v1.28 loaded.');
+  log('LÖVE Web Executor v1.29 loaded.');
   log('Click "Check engine files" first if the game screen is black.');
   log('Expected layout: player.js, 11.5/love.js, 11.5/love.wasm, lua/normalize1.lua, lua/normalize2.lua.');
 })();
